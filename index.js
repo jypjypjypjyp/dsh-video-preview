@@ -16,12 +16,14 @@
  * Security posture mirrors better-sidebar's own routes:
  *  - same Host-header trust fence as the `/api` gateway (loopback or the web
  *    runtime's `trustedHosts`; cross-site browser markers refused);
- *  - the resolved path must sit under the session's authoritative working
- *    directory (case/separator tolerant), so a crafted `..` can never escape.
+ *  - the request path is absolute or workspace-relative (a relative path
+ *    resolves against the session's authoritative working directory) and must
+ *    sit under that directory (case/separator tolerant), so a crafted `..` can
+ *    never escape.
  */
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { extname, resolve, sep } from 'node:path'
+import { extname, isAbsolute, resolve, sep } from 'node:path'
 
 /** Plugin identity for cordis.yml rows / client-modules keying. */
 export const name = 'dsh-video-preview'
@@ -263,7 +265,9 @@ export function apply(ctx) {
           throw new SidebarError('bad-request', 'sessionId and path are required')
         }
         const cwd = sessionCwdOf(ctx, sessionId, url.searchParams.get('cwd') ?? undefined)
-        const path = requireAbsolute(raw)
+        // Absolute paths are taken as given; a workspace-relative path (what
+        // better-sidebar hands its file viewers) resolves against the session cwd.
+        const path = isAbsolute(raw) ? requireAbsolute(raw) : resolve(cwd, raw)
         if (!isWithin(cwd, path)) {
           throw new SidebarError('fs-error', 'video path outside the session working directory', 403)
         }

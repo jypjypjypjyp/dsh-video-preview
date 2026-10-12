@@ -71,8 +71,12 @@ check('416 content-range */', r5.headers.get('content-range') === `bytes */${siz
 const r6 = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent('/etc/hosts')}`)
 check('outside-cwd 403', r6.status === 403)
 
-const r7 = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent('relative.mp4')}`)
-check('relative path 400', r7.status === 400)
+const r7 = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent('clip.mp4')}`)
+check('relative path resolves against cwd 200', r7.status === 200)
+check('relative body equals file', r7.buf.equals(bytes))
+
+const r7b = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent('../escape.mp4')}`)
+check('relative escape 403', r7b.status === 403)
 
 const r8 = await req(url(), { headers: { 'sec-fetch-site': 'cross-site', origin: 'http://evil.example' } })
 check('cross-site 403', r8.status === 403)

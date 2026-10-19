@@ -20,6 +20,76 @@ window.__ModuleLoader__.load({
     // src/client/index.js
     var import_react = require("react");
 
+    /** Host route that reports the user's home directory (index.js). */
+    var HOME_URL = "/video/home";
+
+    /** Cached promise of the home lookup; reset to null when it comes back empty. */
+    var homePromise = null;
+
+    /** Resolve the host user's home directory once. */
+    function homeDir() {
+      if (homePromise !== null) return homePromise;
+      homePromise = fetch(HOME_URL, { headers: { accept: "application/json" } })
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (body) {
+          return body !== null && typeof body.home === "string" && body.home !== "" ? body.home : null;
+        })
+        .catch(function () { return null; })
+        .then(function (home) {
+          if (home === null) homePromise = null;
+          return home;
+        });
+      return homePromise;
+    }
+
+    /** `~`, `~/x`, `~\x` expanded against `home`; null for any other path. */
+    function expandHomePath(home, path) {
+      if (home === null) return null;
+      if (path === "~") return home;
+      if (path.indexOf("~/") === 0 || path.indexOf("~\\") === 0) return home + path.slice(1);
+      return null;
+    }
+
+    /**
+     * Rewrite a `~`-prefixed `path` in better-sidebar's /sidebar/api bodies
+     * into an absolute one before the request leaves the browser.
+     *
+     * better-sidebar only expands `~` after its own relative-path resolution:
+     * `fs.read` joins every non-absolute target onto the session cwd first, so
+     * a typed `~/.dsh/skins/harbor/patches.css` is stat'd as
+     * `<cwd>/~/.dsh/...` and fails with ENOENT. Expanding here keeps the
+     * editor's other entry points (tree rows, git rows) byte-for-byte
+     * unchanged: only requests that already carry a `~` target are touched,
+     * and only when the host answers the home lookup.
+     */
+    function applyPathShim() {
+      var original = window.fetch;
+      window.fetch = function (input, init) {
+        var url = typeof input === "string" ? input : input && typeof input.url === "string" ? input.url : "";
+        var body = init && typeof init.body === "string" ? init.body : null;
+        if (url.indexOf("/sidebar/api/") !== -1 && body !== null && body.indexOf("\"path\":\"~") !== -1) {
+          try {
+            var payload = JSON.parse(body);
+            var path = payload !== null && typeof payload.path === "string" ? payload.path : null;
+            var prefixed = path !== null && (path === "~" || path.indexOf("~/") === 0 || path.indexOf("~\\") === 0);
+            if (prefixed) {
+              return homeDir().then(function (home) {
+                var expanded = expandHomePath(home, path);
+                if (expanded === null) return original.call(window, input, init);
+                payload.path = expanded;
+                return original.call(window, input, Object.assign({}, init, { body: JSON.stringify(payload) }));
+              });
+            }
+          } catch (error) {
+            // Not the JSON body we expect: send the request through untouched.
+          }
+        }
+        return original.call(window, input, init);
+      };
+      window.fetch.__dshVideoPreviewPathShim = true;
+      return function () { window.fetch = original; };
+    }
+
     /** File extensions this viewer claims (lowercase, no dot). */
     var VIDEO_EXTS = [
       "mp4", "webm", "mov", "qt", "m4v", "mkv", "avi", "wmv", "flv",
@@ -143,6 +213,12 @@ window.__ModuleLoader__.load({
     var inject = ["betterSidebar"];
 
     function apply(ctx) {
+      // The fetch shim patches a global; ctx.effect hands back its disposer so
+      // teardown (HMR / plugin disable) restores the untouched window.fetch.
+      ctx.effect(function () {
+        return applyPathShim();
+      });
+
       // Registration must be wrapped in ctx.effect so the disposer returned by
       // registerFileViewer is invoked on fiber teardown (HMR / plugin disable);
       // otherwise a later re-activation throws "already registered".

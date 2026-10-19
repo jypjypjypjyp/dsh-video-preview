@@ -3,15 +3,16 @@
  *
  * No ffmpeg or external fixtures required: it fabricates a byte file in a temp
  * dir, mounts the host half against a real node http server, and asserts the
- * Range/security semantics (200 full, 206 ranges, suffix range, 416, 403 path
- * escape, cross-site 403, HEAD, POST 405).
+ * Range/security semantics (200 full, 206 ranges, suffix range, 416, absolute
+ * path outside the cwd, relative resolution, missing 404, cross-site 403, HEAD,
+ * POST 405).
  *
  *   node test/route.test.mjs
  */
 import { createServer } from 'node:http'
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join, basename } from 'node:path'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -27,7 +28,7 @@ const size = bytes.length
 let handler = null
 const fakeCtx = {
   sessions: { get: (id) => (id === 'sess-1' ? { header: { cwd: root } } : undefined) },
-  webRuntime: { trustedHosts: [] },
+  webStartup: { trustedHosts: [] },
   webServer: { register: (entry) => { handler = entry.handler; return () => {} } },
   effect: (fn) => { fn(); return () => {} },
 }
@@ -68,15 +69,46 @@ const r5 = await req(url(), { headers: { range: 'bytes=999999-' } })
 check('unsatisfiable 416', r5.status === 416)
 check('416 content-range */', r5.headers.get('content-range') === `bytes */${size}`)
 
-const r6 = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent('/etc/hosts')}`)
-check('outside-cwd 403', r6.status === 403)
+// No workspace containment (same as better-sidebar's fs routes): an absolute
+// path outside the session cwd streams — this is the /tmp scratch-dir case.
+const outside = mkdtempSync(join(tmpdir(), 'dsh-video-preview-outside-'))
+const outsideFile = join(outside, 'clip.mp4')
+const outsideBytes = Buffer.from(Array.from({ length: 2048 }, (_, i) => (i * 17 + 5) % 256))
+writeFileSync(outsideFile, outsideBytes)
+
+const r6 = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent(outsideFile)}`)
+check('absolute path outside cwd 200', r6.status === 200)
+check('outside body equals file', r6.buf.equals(outsideBytes))
 
 const r7 = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent('clip.mp4')}`)
 check('relative path resolves against cwd 200', r7.status === 200)
 check('relative body equals file', r7.buf.equals(bytes))
 
-const r7b = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent('../escape.mp4')}`)
-check('relative escape 403', r7b.status === 403)
+const r7b = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent(`../${basename(outside)}/clip.mp4`)}`)
+check('relative path may leave cwd (no containment) 200', r7b.status === 200)
+check('escaped relative body equals file', r7b.buf.equals(outsideBytes))
+
+const r7c = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent(join(root, 'missing.mp4'))}`)
+check('missing file 404', r7c.status === 404)
+
+// A leading `~` names the host user's home, never a cwd-relative segment: the
+// client shim expands it before better-sidebar's fs routes, and this route
+// expands it on its own so both halves agree on the semantics.
+const homeRes = await req(`${base}/video/home`)
+const homeBody = JSON.parse(homeRes.buf.toString())
+check('/video/home 200', homeRes.status === 200)
+check('/video/home matches os.homedir()', homeBody.home === homedir())
+
+const homeFixture = mkdtempSync(join(homedir(), '.dsh-video-preview-test-'))
+const homeFile = join(homeFixture, 'clip.mp4')
+writeFileSync(homeFile, bytes)
+const tildePath = `~/${basename(homeFixture)}/clip.mp4`
+const rTilde = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent(tildePath)}`)
+check('tilde path 200', rTilde.status === 200, tildePath)
+check('tilde body equals file', rTilde.buf.equals(bytes))
+const rTildeMissing = await req(`${base}/video?sessionId=sess-1&path=${encodeURIComponent('~/.dsh-video-preview-test-missing/clip.mp4')}`)
+check('tilde path missing 404', rTildeMissing.status === 404)
+rmSync(homeFixture, { recursive: true, force: true })
 
 const r8 = await req(url(), { headers: { 'sec-fetch-site': 'cross-site', origin: 'http://evil.example' } })
 check('cross-site 403', r8.status === 403)

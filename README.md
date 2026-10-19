@@ -31,6 +31,16 @@ better-sidebar 内置的文件预览器只有 image / pdf / markdown / html / co
 - 自带 `/video/*` 宿主路由：HTTP Range / If-Range / suffix-range（`bytes=-N`），视频大小不受 `mediaLimit` 限制
 - viewer 描述符带 `title`/`icon`，Side card 设置页自动显示启用开关（含 16px 播放器图标）
 - 客户端组件自包含：不依赖 better-sidebar 的 client 内部实现，`fetchStrategy: 'none'`
+- `~` 路径可用：路径栏里输入 `~/.dsh/skins/harbor/patches.css` 这类路径能直接打开（把 `~` 展开成宿主 home 绝对路径再交给 better-sidebar；见下节）
+
+## `~` 路径（为什么需要客户端补一层）
+
+better-sidebar 的读文件接口（`/sidebar/api/fs.read`）在展开 `~` **之前**就把非绝对路径拼到会话工作目录上，
+于是手输 `~/.dsh/x.css` 会被 stat 成 `<cwd>/~/.dsh/x.css` 并以 ENOENT 400 失败；只有绝对路径和相对路径能用。
+
+本插件在 `client.js` 里给 `window.fetch` 加了一层窄补丁：只拦发往 `/sidebar/api/*`、且 body 里带 `"path":"~/..."`
+的请求，把它展开成绝对路径再放行；宿主半的 `/video/home` 提供 home 目录。拿不到 home（宿主未重启）时补丁
+原样放行，行为与不加补丁完全一致。宿主半的 `/video` 路由自己也支持 `~`。
 
 ## 依赖 better-sidebar 版本
 
@@ -62,7 +72,7 @@ dsh plugin --profile web add file:<本目录>/dsh-video-preview-0.1.1.tgz
 ## 开发与检查
 
 ```sh
-node test/route.test.mjs   # 宿主路由回归测试（Range/206/416/403/HEAD/405，19 项）
+node test/route.test.mjs   # 宿主路由回归测试（Range/206/416/404/HEAD/405/`~` 展开/`/video/home`，29 项）
 ```
 
 | 检查项 | 命令 | 预期 |
@@ -76,15 +86,15 @@ node test/route.test.mjs   # 宿主路由回归测试（Range/206/416/403/HEAD/4
 
 | 文件 | 作用 |
 |---|---|
-| `index.js` | 宿主半：注册 `/video/*` 前缀路由（Host 头信任围栏 + 会话 cwd 越界检查 + Range/If-Range/suffix-range） |
-| `client.js` | 客户端 bundle：经 `ctx.betterSidebar.registerFileViewer` 注册 `video` 预览器（`fetchStrategy: 'none'`，含 16px 图标） |
+| `index.js` | 宿主半：注册 `/video/*` 前缀路由（Host 头信任围栏 + 绝对/相对/`~` 路径解析 + Range/If-Range/suffix-range + `/video/home`） |
+| `client.js` | 客户端 bundle：经 `ctx.betterSidebar.registerFileViewer` 注册 `video` 预览器（`fetchStrategy: 'none'`，含 16px 图标）；另给 `window.fetch` 加 `~` 路径窄补丁 |
 | `cordis.patch.yml` | `dsh.bundle.patch`：挂载行（entry `name` 与包名一致，供 client-modules 发现 client bundle） |
-| `test/route.test.mjs` | 宿主路由回归测试（自包含，无需 ffmpeg） |
+| `test/route.test.mjs` | 宿主路由回归测试（自包含，无需 ffmpeg；`~` 用例在 home 下建临时目录） |
 
 ## 安全
 
 - 路由复用与 `/api` 网关相同的 Host 头信任围栏（loopback 或 `trustedHosts`，拒绝跨站）；
-- 解析后的路径必须位于会话权威工作目录内（大小写/分隔符容忍），`..` 无法越界；
+- 不做工作区越界限制（与 better-sidebar 自己的 fs 路由一致）：相对路径按会话工作目录解析，绝对路径照原样读取——`/tmp` 等目录下的视频可直接预览；
 - 只读流式下发，不写文件、不设身份。
 
 ## 说明与限制

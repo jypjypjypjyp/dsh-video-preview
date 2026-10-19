@@ -15,21 +15,24 @@
  *
  * Security posture mirrors better-sidebar's own routes:
  *  - same Host-header trust fence as the `/api` gateway (loopback or the web
- *    runtime's `trustedHosts`; cross-site browser markers refused);
+ *    startup's `trustedHosts`; cross-site browser markers refused);
  *  - the request path is absolute or workspace-relative (a relative path
- *    resolves against the session's authoritative working directory) and must
- *    sit under that directory (case/separator tolerant), so a crafted `..` can
- *    never escape.
+ *    resolves against the session's authoritative working directory). There is
+ *    NO workspace containment: better-sidebar's own fs routes dropped that
+ *    guard, and previews routinely point outside the workspace (`/tmp` scratch
+ *    dirs hold most A/B video output), so a containment check here only 403s
+ *    files the sidebar's neighbour routes already serve.
  */
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { extname, isAbsolute, resolve, sep } from 'node:path'
+import { homedir } from 'node:os'
+import { extname, isAbsolute, join, resolve, sep } from 'node:path'
 
 /** Plugin identity for cordis.yml rows / client-modules keying. */
 export const name = 'dsh-video-preview'
 
-/** Services required before mounting: route registration + session cwd + the web runtime's trusted hosts. */
-export const inject = ['webServer', 'sessions', 'webRuntime']
+/** Services required before mounting: route registration + session cwd + the web startup's trusted hosts. */
+export const inject = ['webServer', 'sessions', 'webStartup']
 
 /** Content types for the video route, by extension. */
 const VIDEO_TYPES = {
@@ -115,16 +118,11 @@ function requireAbsolute(path) {
   return resolve(path)
 }
 
-function isWithin(base, target) {
-  const norm = (value) => value.replace(/[\\/]+/g, '/').replace(/\/$/, '')
-  const b = norm(base)
-  const t = norm(target)
-  if (process.platform === 'win32') {
-    const lb = b.toLowerCase()
-    const lt = t.toLowerCase()
-    return lt === lb || lt.startsWith(`${lb}/`)
-  }
-  return t === b || t.startsWith(`${b}/`)
+/** Expand a leading `~` to the host user's home directory. */
+function expandHome(path) {
+  if (path === '~') return homedir()
+  if (path.startsWith('~/') || path.startsWith('~\\')) return join(homedir(), path.slice(2))
+  return path
 }
 
 /** Local error type mirroring better-sidebar's SidebarError wire shape. */
@@ -241,7 +239,7 @@ function serveFile(req, res, path, size, type) {
 // ── plugin body ──────────────────────────────────────────────────────────────
 
 export function apply(ctx) {
-  const fence = (req) => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts)
+  const fence = (req) => isTrustedApiRequest(req, ctx.webStartup.trustedHosts ?? [])
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
@@ -259,18 +257,26 @@ export function apply(ctx) {
       }
       try {
         const url = new URL(req.url ?? '/', 'http://dsh.internal')
+        // Home directory for the client's `~`-path shim (client.js expands a
+        // `~` prefix before it reaches better-sidebar's fs routes).
+        if (url.pathname === '/video/home') {
+          const body = JSON.stringify({ home: homedir() })
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-length': String(Buffer.byteLength(body)), 'cache-control': 'no-cache' })
+          res.end(body)
+          return
+        }
         const sessionId = url.searchParams.get('sessionId')
         const raw = url.searchParams.get('path')
         if (sessionId === null || raw === null) {
           throw new SidebarError('bad-request', 'sessionId and path are required')
         }
         const cwd = sessionCwdOf(ctx, sessionId, url.searchParams.get('cwd') ?? undefined)
-        // Absolute paths are taken as given; a workspace-relative path (what
-        // better-sidebar hands its file viewers) resolves against the session cwd.
-        const path = isAbsolute(raw) ? requireAbsolute(raw) : resolve(cwd, raw)
-        if (!isWithin(cwd, path)) {
-          throw new SidebarError('fs-error', 'video path outside the session working directory', 403)
-        }
+        // Absolute paths are taken as given (a preview usually points at a
+        // scratch dir like /tmp); a workspace-relative path (what better-sidebar
+        // hands its file viewers) resolves against the session cwd. A leading
+        // `~` names the host user's home, never a cwd-relative segment.
+        const expanded = expandHome(raw)
+        const path = isAbsolute(expanded) ? requireAbsolute(expanded) : resolve(cwd, expanded)
         const info = await stat(path)
         if (!info.isFile()) {
           throw new SidebarError('fs-error', 'not a file', 400)
@@ -282,7 +288,9 @@ export function apply(ctx) {
         const type = VIDEO_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream'
         serveFile(req, res, path, info.size, type)
       } catch (error) {
-        writeError(res, error)
+        writeError(res, error?.code === 'ENOENT'
+          ? new SidebarError('fs-error', 'video not found', 404)
+          : error)
       }
     },
   }), 'dsh-video-preview: /video range route')

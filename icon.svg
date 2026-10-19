@@ -1,0 +1,10 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2" y="2" width="32" height="32" rx="9" fill="url(#dshVideoPreview)"/>
+  <path d="M14.8 11.6 25 18l-10.2 6.4z" fill="#FFFFFF" fill-opacity="0.96"/>
+  <defs>
+    <linearGradient id="dshVideoPreview" x1="2" y1="2" x2="34" y2="34" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFB46B"/>
+      <stop offset="1" stop-color="#F0603C"/>
+    </linearGradient>
+  </defs>
+</svg>

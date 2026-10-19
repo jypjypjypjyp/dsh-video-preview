@@ -29,6 +29,7 @@ better-sidebar 内置的文件预览器只有 image / pdf / markdown / html / co
   - 内联 `<video controls>`：播放/暂停、拖进度条（Range 206）、倍速、全屏、音量、`preload=metadata`
   - 底部文件名 + 「下载」链接（浏览器无法解码的容器格式仍可下载原文件）
 - 自带 `/video/*` 宿主路由：HTTP Range / If-Range / suffix-range（`bytes=-N`），视频大小不受 `mediaLimit` 限制
+- 包根 `icon.svg` 作为插件页的插件图标（origin/橙渐变播放键，36×36）
 - viewer 描述符带 `title`/`icon`，Side card 设置页自动显示启用开关（含 16px 播放器图标）
 - 客户端组件自包含：不依赖 better-sidebar 的 client 内部实现，`fetchStrategy: 'none'`
 - 解不了的编码不再只是一块黑屏：播放器位置直接说明原因，并给出可一键复制的 ffmpeg 转码命令（路径已展开成绝对路径）

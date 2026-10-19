@@ -144,26 +144,139 @@ window.__ModuleLoader__.load({
       ]);
     }
 
+    /** ffmpeg command that re-encodes a file the browser cannot decode. */
+    function transcodeCommand(path) {
+      var quote = function (value) { return "'" + String(value).replace(/'/g, "'\\''") + "'"; };
+      var stem = path.replace(/\.[^./\\]+$/, "");
+      return "ffmpeg -i " + quote(path) + " -c:v libx264 -crf 20 -pix_fmt yuv420p -movflags +faststart " + quote(stem + "_h264.mp4");
+    }
+
     /** ReactNode: the inline player. Props = FileViewerProps. */
     function VideoView(props) {
       var scope = props.scope;
       var path = props.path;
       var url = videoUrl(scope, path);
       var dl = downloadUrl(scope, path);
-      return import_react.createElement("div", {
-        style: {
-          display: "flex",
-          flexDirection: "column",
-          gap: "10px",
-          padding: "12px",
-          minWidth: 0,
-          minHeight: 0,
-          height: "100%",
-          boxSizing: "border-box"
+      var failedPair = import_react.useState(false);
+      var failed = failedPair[0];
+      var setFailed = failedPair[1];
+      var copiedPair = import_react.useState(false);
+      var copied = copiedPair[0];
+      var setCopied = copiedPair[1];
+      var videoRef = import_react.useRef(null);
+      var timerRef = import_react.useRef(null);
+      // Better-sidebar hands a session-relative path; the command must work
+      // from any directory, so rebuild the absolute one when the cwd is known.
+      var absolute = /^[\/]|^[A-Za-z]:[\\/]/.test(path) || scope.cwd === undefined
+        ? path
+        : scope.cwd.replace(/[\\/]+$/, "") + "/" + path;
+      var command = transcodeCommand(absolute);
+
+      // `error` on a media element does not bubble, so React's synthetic
+      // onError is not enough here: listen on the element itself.
+      import_react.useEffect(function () {
+        setFailed(false);
+        var element = videoRef.current;
+        if (element === null) return undefined;
+        var onError = function () { setFailed(true); };
+        element.addEventListener("error", onError);
+        if (element.error !== null) onError();
+        return function () { element.removeEventListener("error", onError); };
+      }, [url]);
+
+      import_react.useEffect(function () {
+        return function () {
+          if (timerRef.current !== null) clearTimeout(timerRef.current);
+        };
+      }, []);
+
+      var copyCommand = function () {
+        var flash = function () {
+          setCopied(true);
+          if (timerRef.current !== null) clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(function () { setCopied(false); }, 2000);
+        };
+        if (navigator.clipboard !== undefined && navigator.clipboard.writeText !== undefined) {
+          navigator.clipboard.writeText(command).then(flash, flash);
+          return;
         }
-      }, [
-        import_react.createElement("video", {
+        var area = document.createElement("textarea");
+        area.value = command;
+        area.style.cssText = "position:fixed;left:-9999px;top:0";
+        document.body.appendChild(area);
+        area.select();
+        try { document.execCommand("copy"); } catch (error) { /* the text stays selectable on screen */ }
+        area.remove();
+        flash();
+      };
+
+      var body = failed
+        ? import_react.createElement("div", {
+          key: "unsupported",
+          style: {
+            flex: "1 1 auto",
+            minHeight: 0,
+            overflow: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+            padding: "14px",
+            borderRadius: "6px",
+            background: "var(--dsw-alias-bg-layer-2, #1d2540)",
+            border: "1px solid var(--dsw-alias-border-l1, rgba(255,255,255,0.07))"
+          }
+        }, [
+          import_react.createElement("div", {
+            key: "title",
+            style: { fontSize: "13px", fontWeight: 600, color: "var(--dsw-alias-label-primary, #fff5ec)" }
+          }, "\u6D4F\u89C8\u5668\u89E3\u4E0D\u4E86\u8FD9\u4E2A\u89C6\u9891\u7684\u7F16\u7801"),
+          import_react.createElement("div", {
+            key: "desc",
+            style: { fontSize: "12px", lineHeight: "1.6", color: "var(--dsw-alias-label-secondary, #d6c7b8)" }
+          }, "\u5E38\u89C1\u539F\u56E0\u662F\u7F16\u7801\u4E0D\u53D7\u652F\u6301\uFF08\u5982 OpenCV \u9ED8\u8BA4\u5199\u51FA\u7684 mp4v / MPEG-4 Part 2\uFF0C\u6216 HEVC\uFF09\u3002\u5728\u4F1A\u8BDD\u5DE5\u4F5C\u76EE\u5F55\u4E0B\u8DD1\u4E0B\u9762\u8FD9\u6761\u547D\u4EE4\uFF0C\u8F6C\u6210 h264 \u5C31\u80FD\u64AD\uFF1A"),
+          import_react.createElement("pre", {
+            key: "cmd",
+            style: {
+              margin: 0,
+              padding: "8px 10px",
+              borderRadius: "4px",
+              background: "var(--dsw-alias-markdown-code-block, #12182e)",
+              color: "var(--dsw-alias-label-primary, #fff5ec)",
+              fontSize: "11px",
+              lineHeight: "1.55",
+              fontFamily: "var(--dsw-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+              userSelect: "all"
+            }
+          }, command),
+          import_react.createElement("div", {
+            key: "actions",
+            style: { display: "flex", gap: "8px", alignItems: "center" }
+          }, [
+            import_react.createElement("button", {
+              key: "copy",
+              type: "button",
+              onClick: copyCommand,
+              style: {
+                border: "1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.12))",
+                borderRadius: "4px",
+                background: copied ? "var(--dsw-alias-state-success-tertiary, rgba(127,214,164,0.16))" : "var(--dsw-alias-bg-layer-3, #222b4a)",
+                color: copied ? "var(--dsw-alias-state-success-primary, #7fd6a4)" : "var(--dsw-alias-label-primary, #fff5ec)",
+                fontSize: "12px",
+                padding: "4px 10px",
+                cursor: "pointer"
+              }
+            }, copied ? "\u5DF2\u590D\u5236" : "\u590D\u5236\u547D\u4EE4"),
+            import_react.createElement("span", {
+              key: "hint",
+              style: { fontSize: "11px", color: "var(--dsw-alias-label-caption, #8a8291)" }
+            }, "\u4E5F\u53EF\u4EE5\u76F4\u63A5\u4E0B\u8F7D\u539F\u6587\u4EF6\uFF08\u53F3\u4E0B\u89D2\uFF09")
+          ])
+        ])
+        : import_react.createElement("video", {
           key: "v",
+          ref: videoRef,
           src: url,
           controls: true,
           preload: "metadata",
@@ -177,35 +290,47 @@ window.__ModuleLoader__.load({
             borderRadius: "6px",
             outline: "none"
           }
-        }),
-        import_react.createElement("div", {
-          key: "meta",
+        });
+
+      return import_react.createElement("div", {
+        style: {
+          display: "flex",
+          flexDirection: "column",
+          gap: "10px",
+          padding: "12px",
+          minWidth: 0,
+          minHeight: 0,
+          height: "100%",
+          boxSizing: "border-box"
+        }
+      }, [body, import_react.createElement("div", {
+        key: "meta",
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          flex: "none",
+          fontSize: "12px",
+          color: "var(--dsw-alias-label-secondary, #8b90a0)",
+          minWidth: 0
+        }
+      }, [
+        import_react.createElement("span", {
+          key: "t",
+          title: path,
+          style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "1 1 auto" }
+        }, props.title),
+        import_react.createElement("a", {
+          key: "d",
+          href: dl,
+          download: true,
           style: {
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
             flex: "none",
-            fontSize: "12px",
-            color: "var(--dsw-alias-label-secondary, #8b90a0)",
-            minWidth: 0
+            color: "var(--dsw-alias-link-normal, #4c8dff)",
+            textDecoration: "none"
           }
-        }, [
-          import_react.createElement("span", {
-            key: "t",
-            title: path,
-            style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "1 1 auto" }
-          }, props.title),
-          import_react.createElement("a", {
-            key: "d",
-            href: dl,
-            download: true,
-            style: {
-              flex: "none",
-              color: "var(--dsw-alias-link-normal, #4c8dff)",
-              textDecoration: "none"
-            }
-          }, "\u4E0B\u8F7D")
-        ])
+        }, "\u4E0B\u8F7D")
+      ])
       ]);
     }
 

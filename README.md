@@ -31,6 +31,7 @@ better-sidebar 内置的文件预览器只有 image / pdf / markdown / html / co
 - 自带 `/video/*` 宿主路由：HTTP Range / If-Range / suffix-range（`bytes=-N`），视频大小不受 `mediaLimit` 限制
 - viewer 描述符带 `title`/`icon`，Side card 设置页自动显示启用开关（含 16px 播放器图标）
 - 客户端组件自包含：不依赖 better-sidebar 的 client 内部实现，`fetchStrategy: 'none'`
+- 解不了的编码不再只是一块黑屏：播放器位置直接说明原因，并给出可一键复制的 ffmpeg 转码命令（路径已展开成绝对路径）
 - `~` 路径可用：路径栏里输入 `~/.dsh/skins/harbor/patches.css` 这类路径能直接打开（把 `~` 展开成宿主 home 绝对路径再交给 better-sidebar；见下节）
 
 ## `~` 路径（为什么需要客户端补一层）
@@ -100,7 +101,8 @@ node test/route.test.mjs   # 宿主路由回归测试（Range/206/416/404/HEAD/4
 ## 说明与限制
 
 - 支持浏览器可解码的容器/编码（H.264 的 mp4/m4v、VP8/VP9 的 webm、mov、OGV 等）；
-  Chrome/Edge/Firefox 不内置解码的格式（如部分 HEVC、AV1 组合）会在播放器内报错，可用「下载」取回原文件；
+  Chrome/Edge/Firefox 不内置解码的格式（如 OpenCV 默认写出的 mp4v / MPEG-4 Part 2、HEVC）会显示
+  「浏览器解不了这个视频的编码」并给出可一键复制的 ffmpeg 转码命令，也可用「下载」取回原文件；
 - 视频大小不受 better-sidebar `mediaLimit` 限制；
 - 不新建 Tab 页，仅作为文件预览器注册（也可按需再加 `registerTab`）。
 
